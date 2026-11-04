@@ -256,13 +256,24 @@ function getIcon(id) {
   const mapped=oldCategoryIcons[id]||id;
   return icons.find(i=>i.id===mapped)||icons[1];
 }
+
 function cropHTML(id) {
-  const icon=getIcon(id);
-  return `<div class="gta-crop">
-    <div class="gta-crop-inner"
-    style="left:-${icon.x}px;top:-${icon.y}px"></div>
+  const icon = getIcon(id);
+  const index = icons.findIndex(i => i.id === icon.id);
+  const position = index * 40;
+
+  return `<div class="gta-crop"
+    style="
+      width:40px;
+      height:40px;
+      background-image:url('gta-seven-icons.png');
+      background-repeat:no-repeat;
+      background-size:280px 40px;
+      background-position:-${position}px 0;
+    ">
   </div>`;
 }
+
 function buildPicker() {
   const picker=document.getElementById("iconPicker");
   picker.innerHTML=icons.map(i=>`
