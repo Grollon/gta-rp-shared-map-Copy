@@ -1,0 +1,309 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTA RP Shared Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#11151b;--panel:#1b222b;--line:#303b49;--text:#edf2f7;--muted:#9eacbb;--accent:#70d6a2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,Segoe UI,Arial,sans-serif}
+header{min-height:64px;padding:12px 18px;background:#171d25;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.brand{font-weight:800;letter-spacing:.06em}.brand span{color:var(--accent)}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{border:1px solid var(--line);background:#26313d;color:var(--text);padding:9px 12px;border-radius:8px;cursor:pointer;font-weight:650}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#102018;border-color:var(--accent)}
+#layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;height:calc(100vh - 65px);min-height:520px}
+#map{height:100%;background:#202a32}
+aside{background:var(--panel);border-left:1px solid var(--line);padding:16px;overflow:auto}
+h2{font-size:17px;margin:0 0 10px}
+.hint{color:var(--muted);font-size:13px;margin:0 0 14px}
+.search,.filter{width:100%;padding:10px;background:#10161d;border:1px solid var(--line);border-radius:8px;color:var(--text);margin:0 0 10px}
+#pinList{display:flex;flex-direction:column;gap:8px}
+.pinrow{padding:10px;border:1px solid var(--line);border-radius:9px;background:#171e26;display:flex;gap:8px;align-items:flex-start}
+.pinrow .info{flex:1;min-width:0}.pinrow strong{display:block;overflow-wrap:anywhere}
+.pinrow small{color:var(--muted);display:block;overflow-wrap:anywhere}
+.pinrow button{padding:5px 8px;font-size:12px}
+.category-label{font-size:11px!important;font-weight:700;margin-top:3px}
+.empty{color:var(--muted);padding:14px;border:1px dashed var(--line);border-radius:8px}
+.modalback{position:fixed;inset:0;background:#0009;display:none;align-items:center;justify-content:center;padding:16px;z-index:2000}
+.modal{width:min(460px,100%);background:#1b222b;border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 18px 60px #0008}
+label{display:block;font-size:13px;color:var(--muted);margin:12px 0 5px}
+input,textarea,select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:#10161d;color:var(--text);font:inherit}
+textarea{min-height:90px;resize:vertical}
+.modalactions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+#status{font-size:12px;color:var(--muted);padding-top:14px}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#202a34;color:#edf2f7}
+.leaflet-control-attribution{font-size:10px!important}
+.map-marker{width:34px;height:34px;border:2px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 7px #0009}
+.map-marker span{transform:rotate(45deg);font-size:17px;line-height:1}
+@media(max-width:800px){#layout{grid-template-columns:1fr;grid-template-rows:minmax(360px,1fr) 270px;height:calc(100vh - 65px)}aside{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header>
+<div class="brand">SAN ANDREAS <span>RP</span> // SHARED MAP</div>
+<div class="tools">
+<button id="addBtn" class="primary">＋ Add location</button>
+<button id="fitBtn">Show full map</button>
+</div>
+</header>
+
+<div id="layout">
+<div id="map"></div>
+<aside>
+<h2>Saved locations</h2>
+<p class="hint">Shared locations added by the community.</p>
+<input id="search" class="search" placeholder="Search locations…">
+<select id="filter" class="filter">
+<option value="all">Show all categories</option>
+<option value="mechanic">🔧 Mechanics</option>
+<option value="shop">🏪 Shops</option>
+<option value="garage">🚗 Garages</option>
+<option value="house">🏠 Houses / Properties</option>
+<option value="job">💼 Jobs</option>
+<option value="safehouse">🛡️ Safehouses</option>
+<option value="atm">💰 ATMs / Money</option>
+<option value="general">📍 General</option>
+</select>
+<div id="pinList"><div class="empty">Loading locations…</div></div>
+<div id="status">Connecting to shared database…</div>
+</aside>
+</div>
+
+<div class="modalback" id="modalBack">
+<form class="modal" id="pinForm">
+<h2 id="modalTitle">Add a location</h2>
+<label for="pinTitle">Location name</label>
+<input id="pinTitle" maxlength="80" required placeholder="e.g. Sandy Shores garage">
+<label for="pinCategory">Category</label>
+<select id="pinCategory">
+<option value="mechanic">🔧 Mechanic</option>
+<option value="shop">🏪 Shop</option>
+<option value="garage">🚗 Garage</option>
+<option value="house">🏠 House / Property</option>
+<option value="job">💼 Job</option>
+<option value="safehouse">🛡️ Safehouse</option>
+<option value="atm">💰 ATM / Money</option>
+<option value="general" selected>📍 General</option>
+</select>
+<label for="pinDescription">Description (optional)</label>
+<textarea id="pinDescription" maxlength="1000" placeholder="Details, access notes, who owns it…"></textarea>
+<div class="modalactions">
+<button type="button" id="cancelBtn">Cancel</button>
+<button class="primary" type="submit">Save pin</button>
+</div>
+</form>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// Put your existing Supabase details between the quotation marks.
+const SUPABASE_URL = "https://iejsrhgzaxduldzxllnn.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_VomQiUSirJLQci_xNVlZ2w_gHHXs1fV";
+
+const TILE_ROOT = "https://viruxe.github.io/gtav-map-tiles/atlas/{z}/{x}-{y}.webp";
+
+const categories = {
+mechanic:{name:"Mechanic",icon:"🔧",color:"#e6a23c"},
+shop:{name:"Shop",icon:"🏪",color:"#48a9e6"},
+garage:{name:"Garage",icon:"🚗",color:"#a78bfa"},
+house:{name:"House / Property",icon:"🏠",color:"#55c58b"},
+job:{name:"Job",icon:"💼",color:"#e879a9"},
+safehouse:{name:"Safehouse",icon:"🛡️",color:"#e45c5c"},
+atm:{name:"ATM / Money",icon:"💰",color:"#d6bd42"},
+general:{name:"General",icon:"📍",color:"#aab4bf"}
+};
+
+const statusEl=document.getElementById("status");
+const listEl=document.getElementById("pinList");
+const searchEl=document.getElementById("search");
+const filterEl=document.getElementById("filter");
+let supabaseClient,pins=[],markers=new Map(),editingId=null,pendingPoint=null;
+
+const GTA_CRS=L.extend({},L.CRS.Simple,{
+transformation:new L.Transformation(1/32,0,1/32,0)
+});
+const map=L.map("map",{
+crs:GTA_CRS,minZoom:0,maxZoom:5,zoomSnap:0.25,zoomDelta:0.5
+});
+L.tileLayer(TILE_ROOT,{
+minZoom:0,maxZoom:5,noWrap:true,
+bounds:[[0,0],[8192,8192]],
+attribution:'Unofficial GTA V map tiles · <a href="https://github.com/VIRUXE/gtav-map-tiles" target="_blank" rel="noopener">tile source</a>'
+}).addTo(map);
+const imageBounds=[[0,0],[8192,8192]];
+map.fitBounds(imageBounds);
+map.setMaxBounds([[-100,-100],[8292,8292]]);
+
+function setStatus(message){statusEl.textContent=message}
+function escapeHtml(value){
+return String(value??"").replace(/[&<>"']/g,c=>({
+"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+}[c]));
+}
+function getCategory(key){return categories[key]||categories.general}
+
+function openModal(pin=null,point=null){
+editingId=pin?.id??null;
+pendingPoint=point;
+document.getElementById("modalTitle").textContent=pin?"Edit location":"Add a location";
+document.getElementById("pinTitle").value=pin?.title??"";
+document.getElementById("pinDescription").value=pin?.description??"";
+document.getElementById("pinCategory").value=categories[pin?.category]?pin.category:"general";
+document.getElementById("modalBack").style.display="flex";
+document.getElementById("pinTitle").focus();
+}
+function closeModal(){
+document.getElementById("modalBack").style.display="none";
+editingId=null;
+pendingPoint=null;
+}
+document.getElementById("cancelBtn").addEventListener("click",closeModal);
+document.getElementById("modalBack").addEventListener("click",e=>{
+if(e.target.id==="modalBack")closeModal();
+});
+document.getElementById("addBtn").addEventListener("click",()=>{
+window.addMode=true;
+setStatus("Click the map where you want the new pin.");
+});
+document.getElementById("fitBtn").addEventListener("click",()=>map.fitBounds(imageBounds));
+map.on("click",e=>{
+if(window.addMode){
+openModal(null,e.latlng);
+window.addMode=false;
+}
+});
+
+document.getElementById("pinForm").addEventListener("submit",async e=>{
+e.preventDefault();
+if(!supabaseClient){
+alert("Check your Supabase URL and publishable key in index.html.");
+return;
+}
+const title=document.getElementById("pinTitle").value.trim();
+const description=document.getElementById("pinDescription").value.trim();
+const category=document.getElementById("pinCategory").value;
+if(!title)return;
+const payload={title,description,category};
+if(!editingId){
+if(!pendingPoint){
+alert("Click a position on the map first.");
+return;
+}
+payload.x=Math.max(0,Math.min(1,pendingPoint.lng/8192));
+payload.y=Math.max(0,Math.min(1,pendingPoint.lat/8192));
+}
+const result=editingId
+?await supabaseClient.from("pins").update(payload).eq("id",editingId)
+:await supabaseClient.from("pins").insert(payload);
+if(result.error){
+alert("Could not save pin: "+result.error.message);
+return;
+}
+closeModal();
+await loadPins();
+setStatus("Saved. Everyone viewing this map will see the change.");
+});
+
+async function deletePin(id){
+if(!confirm("Delete this location for everyone?"))return;
+const {error}=await supabaseClient.from("pins").delete().eq("id",id);
+if(error){
+alert("Could not delete pin: "+error.message);
+return;
+}
+await loadPins();
+setStatus("Location deleted for everyone.");
+}
+
+function render(){
+for(const marker of markers.values())map.removeLayer(marker);
+markers.clear();
+
+const query=searchEl.value.trim().toLowerCase();
+const selectedCategory=filterEl.value;
+
+const shown=pins.filter(p=>{
+const matchesSearch=(p.title+" "+(p.description||"")).toLowerCase().includes(query);
+const matchesCategory=selectedCategory==="all"||(p.category||"general")===selectedCategory;
+return matchesSearch&&matchesCategory;
+});
+
+shown.forEach(pin=>{
+const cat=getCategory(pin.category);
+const icon=L.divIcon({
+className:"",
+html:`<div class="map-marker" style="background:${cat.color}"><span>${cat.icon}</span></div>`,
+iconSize:[34,34],
+iconAnchor:[17,34],
+popupAnchor:[0,-32]
+});
+const marker=L.marker(
+[Number(pin.y)*8192,Number(pin.x)*8192],
+{icon}
+).addTo(map);
+marker.bindPopup(
+`<strong>${escapeHtml(pin.title)}</strong><br>
+<span>${cat.icon} ${cat.name}</span>
+${pin.description?`<br>${escapeHtml(pin.description)}`:""}`
+);
+markers.set(pin.id,marker);
+});
+
+listEl.innerHTML=shown.length?shown.map(p=>{
+const cat=getCategory(p.category);
+return `<div class="pinrow">
+<div class="info">
+<strong>${escapeHtml(p.title)}</strong>
+<small class="category-label" style="color:${cat.color}">${cat.icon} ${cat.name}</small>
+<small>${escapeHtml(p.description||"No description")}</small>
+</div>
+<button data-edit="${escapeHtml(p.id)}">Edit</button>
+<button data-delete="${escapeHtml(p.id)}">Delete</button>
+</div>`;
+}).join(""):'<div class="empty">No matching locations. Try another category or add a pin.</div>';
+
+listEl.querySelectorAll("[data-edit]").forEach(b=>
+b.addEventListener("click",()=>openModal(pins.find(p=>p.id===b.dataset.edit)))
+);
+listEl.querySelectorAll("[data-delete]").forEach(b=>
+b.addEventListener("click",()=>deletePin(b.dataset.delete))
+);
+}
+searchEl.addEventListener("input",render);
+filterEl.addEventListener("change",render);
+
+async function loadPins(){
+const {data,error}=await supabaseClient.from("pins").select("*").order("created_at",{ascending:true});
+if(error){
+setStatus("Database error: "+error.message);
+return;
+}
+pins=data||[];
+render();
+setStatus(`${pins.length} shared location${pins.length===1?"":"s"} loaded.`);
+}
+
+(async function init(){
+if(SUPABASE_URL.includes("PASTE_")||SUPABASE_PUBLISHABLE_KEY.includes("PASTE_")){
+setStatus("Setup needed: add your Supabase URL and publishable key inside index.html.");
+return;
+}
+try{
+supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+await loadPins();
+supabaseClient.channel("public-pins-changes")
+.on("postgres_changes",{event:"*",schema:"public",table:"pins"},()=>loadPins())
+.subscribe();
+}catch(err){
+setStatus("Could not connect: "+err.message);
+}
+})();
+</script>
+</body>
+</html>
