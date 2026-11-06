@@ -158,6 +158,7 @@ textarea {min-height:85px;resize:vertical}
 <button id="fitBtn">Show full map</button>
  <button id="discordLoginBtn" type="button">Log in with Discord</button>
  <button id="discordLogoutBtn" type="button" style="display:none">Log out</button>
+ <button id="roleTestBtn" type="button" style="display:none">Test Discord role</button>
 </div>
 </header>
 
@@ -169,6 +170,7 @@ textarea {min-height:85px;resize:vertical}
 <input id="search" class="search" placeholder="Search locations…">
 <div id="pinList"><div class="empty">Loading locations…</div></div>
 <div id="status">Connecting to shared database…</div>
+ <div id="roleTestStatus" role="status" aria-live="polite" style="font-size:13px;margin-top:10px"></div>
 </aside>
 </div>
 
@@ -466,16 +468,51 @@ async function loadPins() {
 
 const loginBtn=document.getElementById("discordLoginBtn");
 const logoutBtn=document.getElementById("discordLogoutBtn");
+const roleTestBtn=document.getElementById("roleTestBtn");
+const roleTestStatus=document.getElementById("roleTestStatus");
 function showDiscordSession(session) {
   discordSession=session;
   loginBtn.style.display=session?"none":"";
   logoutBtn.style.display=session?"":"none";
+  roleTestBtn.style.display=session?"":"none";
+  roleTestStatus.textContent="";
   if(session) {
     const name=session.user?.user_metadata?.full_name ||
       session.user?.user_metadata?.name || "Discord user";
     logoutBtn.textContent=`Log out (${name})`;
   }
 }
+roleTestBtn.addEventListener("click",async()=>{
+  roleTestBtn.disabled=true;
+  roleTestStatus.textContent="Checking your Discord role…";
+  try {
+    const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
+    if(sessionError || !session?.access_token){
+      roleTestStatus.textContent="No active Supabase login. Log out and sign in again.";
+      return;
+    }
+    if(!session.provider_token){
+      roleTestStatus.textContent="Discord token unavailable. Log out, then sign in with Discord again and test immediately.";
+      return;
+    }
+    const {data,error}=await supabaseClient.functions.invoke("check-discord-role",{
+      body:{discordAccessToken:session.provider_token},
+      headers:{Authorization:`Bearer ${session.access_token}`}
+    });
+    if(error){
+      roleTestStatus.textContent="Role test error: "+error.message;
+    }else if(data?.allowed===true){
+      roleTestStatus.textContent="PASS: Discord approved your role. (Database access is not restricted yet.)";
+    }else{
+      roleTestStatus.textContent="NOT APPROVED: Role check returned false. This may be a permission or identity issue; database access is unchanged.";
+    }
+  }catch(err){
+    roleTestStatus.textContent="Role test failed: "+(err?.message||"Unknown error");
+  }finally{
+    roleTestBtn.disabled=false;
+  }
+});
+
 loginBtn.addEventListener("click",async()=>{
   if(!supabaseClient)return alert("Database is not connected yet.");
   const {error}=await supabaseClient.auth.signInWithOAuth({
