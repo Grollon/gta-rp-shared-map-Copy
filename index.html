@@ -224,6 +224,14 @@ const listEl=document.getElementById("pinList");
 const searchEl=document.getElementById("search");
 let supabaseClient;
 let discordSession = null;
+let accessApproved = false;
+let accessExpiresAt = 0;
+let discordProviderToken = null;
+let pinsChannel = null;
+let verificationInFlight = null;
+let authGeneration = 0;
+const ACCESS_RECHECK_MS = 5 * 60 * 1000;
+
 let pins=[];
 let markers=new Map();
 let editingId=null;
@@ -305,6 +313,10 @@ function updatePicker() {
 buildPicker();
 
 function openModal(pin=null,point=null) {
+  if(!accessApproved){
+    setStatus("Please verify your Discord role before editing locations.");
+    return;
+  }
   editingId=pin?.id??null;
   pendingPoint=point;
   selectedIcon=getIcon(pin?.category||"question").id;
@@ -330,6 +342,10 @@ document.getElementById("modalBack")
   });
 document.getElementById("addBtn")
   .addEventListener("click",()=>{
+    if(!accessApproved){
+      setStatus("Log in and verify your Discord role first.");
+      return;
+    }
     addMode=true;
     setStatus("Click the map where you want the new pin.");
   });
@@ -347,6 +363,10 @@ document.getElementById("pinForm")
   e.preventDefault();
   if(!supabaseClient){
     alert("Database is not connected.");
+    return;
+  }
+  if(!await ensureAccess()){
+    alert("Discord access is unavailable. Please verify your role again.");
     return;
   }
   const title=document.getElementById("pinTitle").value.trim();
@@ -376,6 +396,10 @@ document.getElementById("pinForm")
 });
 
 async function deletePin(id) {
+  if(!await ensureAccess()){
+    alert("Discord access is unavailable. Please verify your role again.");
+    return;
+  }
   if(!confirm("Delete this location for everyone?"))return;
   const {error}=await supabaseClient
     .from("pins").delete().eq("id",id);
@@ -454,6 +478,7 @@ function render() {
 searchEl.addEventListener("input",render);
 
 async function loadPins() {
+  if(!accessApproved)return;
   const {data,error}=await supabaseClient
     .from("pins").select("*")
     .order("created_at",{ascending:true});
@@ -475,42 +500,96 @@ function showDiscordSession(session) {
   loginBtn.style.display=session?"none":"";
   logoutBtn.style.display=session?"":"none";
   roleTestBtn.style.display=session?"":"none";
-  roleTestStatus.textContent="";
   if(session) {
     const name=session.user?.user_metadata?.full_name ||
       session.user?.user_metadata?.name || "Discord user";
     logoutBtn.textContent=`Log out (${name})`;
   }
 }
-roleTestBtn.addEventListener("click",async()=>{
-  roleTestBtn.disabled=true;
-  roleTestStatus.textContent="Checking your Discord role…";
-  try {
+
+function clearAccess(message="Log in with Discord to view saved locations.") {
+  accessApproved=false;
+  accessExpiresAt=0;
+  addMode=false;
+  closeModal();
+  pins=[];
+  render();
+  listEl.innerHTML=`<div class="empty">${escapeHtml(message)}</div>`;
+  document.getElementById("addBtn").disabled=true;
+  if(pinsChannel){
+    supabaseClient.removeChannel(pinsChannel);
+    pinsChannel=null;
+  }
+  setStatus(message);
+}
+
+function startPinUpdates(){
+  if(pinsChannel)return;
+  pinsChannel=supabaseClient.channel("verified-pins-changes")
+    .on("postgres_changes",{
+      event:"*",schema:"public",table:"pins"
+    },()=>{if(accessApproved)loadPins();})
+    .subscribe();
+}
+
+async function verifyAccess(){
+  if(verificationInFlight)return verificationInFlight;
+  const generation=authGeneration;
+  verificationInFlight=(async()=>{
     const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
     if(sessionError || !session?.access_token){
-      roleTestStatus.textContent="No active Supabase login. Log out and sign in again.";
-      return;
+      clearAccess("Log in with Discord to view saved locations.");
+      roleTestStatus.textContent="Please log in with Discord.";
+      return false;
     }
-    if(!session.provider_token){
-      roleTestStatus.textContent="Discord token unavailable. Log out, then sign in with Discord again and test immediately.";
-      return;
+    showDiscordSession(session);
+    if(session.provider_token)discordProviderToken=session.provider_token;
+    if(!discordProviderToken){
+      clearAccess("Discord verification needed. Log out and log in with Discord again.");
+      roleTestStatus.textContent="Discord token unavailable. Log out, then log in again.";
+      return false;
     }
-    const {data,error}=await supabaseClient.functions.invoke("check-discord-role",{
-      body:{discordAccessToken:session.provider_token},
-      headers:{Authorization:`Bearer ${session.access_token}`}
-    });
-    if(error){
-      roleTestStatus.textContent="Role test error: "+error.message;
-    }else if(data?.allowed===true){
-      roleTestStatus.textContent="PASS: Discord approved your role. (Database access is not restricted yet.)";
-    }else{
-      roleTestStatus.textContent="NOT APPROVED: Role check returned false. This may be a permission or identity issue; database access is unchanged.";
+    roleTestStatus.textContent="Checking your Discord role…";
+    try{
+      const {data,error}=await supabaseClient.functions.invoke("check-discord-role",{
+        body:{discordAccessToken:discordProviderToken},
+        headers:{Authorization:`Bearer ${session.access_token}`}
+      });
+      if(generation!==authGeneration)return false;
+      if(error || data?.allowed!==true){
+        clearAccess("Discord access not verified. Log in again or check your server role.");
+        roleTestStatus.textContent=error
+          ? `Verification error: ${error.message}`
+          : "Not approved. You need an allowed Discord server role.";
+        return false;
+      }
+      accessApproved=true;
+      accessExpiresAt=Date.now()+14*60*1000; // Slightly shorter than server's 15-minute grant.
+      document.getElementById("addBtn").disabled=false;
+      roleTestStatus.textContent="PASS: Discord role approved. Access active.";
+      startPinUpdates();
+      await loadPins();
+      return true;
+    }catch(err){
+      if(generation!==authGeneration)return false;
+      clearAccess("Could not verify Discord access. Please try again.");
+      roleTestStatus.textContent="Verification failed: "+(err?.message||"Unknown error");
+      return false;
     }
-  }catch(err){
-    roleTestStatus.textContent="Role test failed: "+(err?.message||"Unknown error");
-  }finally{
-    roleTestBtn.disabled=false;
-  }
+  })();
+  try{return await verificationInFlight;}
+  finally{verificationInFlight=null;}
+}
+
+async function ensureAccess(){
+  if(accessApproved && Date.now()<accessExpiresAt)return true;
+  return await verifyAccess();
+}
+
+roleTestBtn.addEventListener("click",async()=>{
+  roleTestBtn.disabled=true;
+  try{await verifyAccess();}
+  finally{roleTestBtn.disabled=false;}
 });
 
 loginBtn.addEventListener("click",async()=>{
@@ -535,18 +614,29 @@ logoutBtn.addEventListener("click",async()=>{
     supabaseClient=window.supabase.createClient(
       SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY
     );
+    clearAccess();
     const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
     if(sessionError)console.warn("Session check:",sessionError.message);
     showDiscordSession(session);
-    supabaseClient.auth.onAuthStateChange((_event,newSession)=>{
+    supabaseClient.auth.onAuthStateChange((event,newSession)=>{
       showDiscordSession(newSession);
+      if(event==="SIGNED_OUT"){
+        authGeneration++;
+        discordProviderToken=null;
+        clearAccess();
+        roleTestStatus.textContent="";
+      }else if(event==="SIGNED_IN"){
+        if(newSession?.provider_token)discordProviderToken=newSession.provider_token;
+        // Run outside the auth callback to avoid blocking auth state processing.
+        setTimeout(()=>{verifyAccess();},0);
+      }
     });
-    await loadPins();
-    supabaseClient.channel("public-pins-changes")
-      .on("postgres_changes",{
-        event:"*",schema:"public",table:"pins"
-      },()=>loadPins()).subscribe();
+    if(session)await verifyAccess();
+    setInterval(()=>{
+      if(discordSession)verifyAccess();
+    },ACCESS_RECHECK_MS);
   }catch(err){
+    clearAccess("Connection error. Please refresh and try again.");
     setStatus("Connection error: "+err.message);
   }
 })();
