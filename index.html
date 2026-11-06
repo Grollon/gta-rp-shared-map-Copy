@@ -156,6 +156,8 @@ textarea {min-height:85px;resize:vertical}
 <div class="tools">
 <button id="addBtn" class="primary">＋ Add location</button>
 <button id="fitBtn">Show full map</button>
+ <button id="discordLoginBtn" type="button">Log in with Discord</button>
+ <button id="discordLogoutBtn" type="button" style="display:none">Log out</button>
 </div>
 </header>
 
@@ -219,6 +221,7 @@ const statusEl=document.getElementById("status");
 const listEl=document.getElementById("pinList");
 const searchEl=document.getElementById("search");
 let supabaseClient;
+let discordSession = null;
 let pins=[];
 let markers=new Map();
 let editingId=null;
@@ -461,11 +464,46 @@ async function loadPins() {
   setStatus(`${pins.length} shared locations loaded.`);
 }
 
+const loginBtn=document.getElementById("discordLoginBtn");
+const logoutBtn=document.getElementById("discordLogoutBtn");
+function showDiscordSession(session) {
+  discordSession=session;
+  loginBtn.style.display=session?"none":"";
+  logoutBtn.style.display=session?"":"none";
+  if(session) {
+    const name=session.user?.user_metadata?.full_name ||
+      session.user?.user_metadata?.name || "Discord user";
+    logoutBtn.textContent=`Log out (${name})`;
+  }
+}
+loginBtn.addEventListener("click",async()=>{
+  if(!supabaseClient)return alert("Database is not connected yet.");
+  const {error}=await supabaseClient.auth.signInWithOAuth({
+    provider:"discord",
+    options:{
+      scopes:"identify guilds.members.read",
+      redirectTo:"https://grollon.github.io/gta-rp-shared-map-Copy/"
+    }
+  });
+  if(error)alert("Discord login failed: "+error.message);
+});
+logoutBtn.addEventListener("click",async()=>{
+  if(!supabaseClient)return;
+  const {error}=await supabaseClient.auth.signOut();
+  if(error)alert("Log out failed: "+error.message);
+});
+
 (async function init(){
   try {
     supabaseClient=window.supabase.createClient(
       SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY
     );
+    const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
+    if(sessionError)console.warn("Session check:",sessionError.message);
+    showDiscordSession(session);
+    supabaseClient.auth.onAuthStateChange((_event,newSession)=>{
+      showDiscordSession(newSession);
+    });
     await loadPins();
     supabaseClient.channel("public-pins-changes")
       .on("postgres_changes",{
